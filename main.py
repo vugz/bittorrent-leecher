@@ -1,6 +1,10 @@
 import bencode
 import asyncio
 import random
+import struct
+import ipaddress
+import os
+import binascii
 
 from tracker import Tracker
 
@@ -11,7 +15,8 @@ class Vutor:
         self.pcq_pieces = asyncio.Queue()
         self.meta_info = torrent 
         self.port = port 
-        self.client_id = "-VU0001-" + "".join([str(random.randint(0,9)) for i in range(12)])
+        self.client_id = "-VU0001-" + binascii.hexlify(os.urandom(6)).decode("utf-8")
+        self.peers = set()
     
     @property
     def meta_info(self):
@@ -35,16 +40,26 @@ class Vutor:
 
     async def run(self):
         await self._request_tracker()
-    
 
     async def _request_tracker(self):
         tracker = Tracker(self.meta_info)
-        print(await tracker.request_peers(self.client_id, self.port))
+        resp = await tracker.request_peers(self.client_id, self.port)
+
+        self.decode_peers_list(resp[b"peers"])
+
+    def decode_peers_list(self, raw_str):
+        return [(self._decode_ip(raw_str[i:i+4]),
+                    self._decode_port(raw_str[i+4:i+6]))
+                                for i in range (0, len(raw_str), 6)]
+
+    def _decode_ip(self, data):
+        return str(ipaddress.ip_address(data))
+    
+    def _decode_port(self, data):
+        return struct.unpack(">H", data)[0]
+
 
 
 if __name__ == '__main__':
     client = Vutor("debian.iso.torrent", max_peers=40, port=8421)
     asyncio.run(client.run())
-
-            
-            
