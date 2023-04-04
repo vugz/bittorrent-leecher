@@ -33,7 +33,9 @@ class Tracker:
             pass
 
         return response
-        
+    
+    async def close(self):
+        await self.http_session.close()
     
     def _build_request(self, client_id, port):
         params = {
