@@ -9,8 +9,8 @@ import hashlib
 import logging
 
 from tracker import Tracker
-from peer import Peer
 
+from peer import Peer
 from peer import ConnectionError
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")

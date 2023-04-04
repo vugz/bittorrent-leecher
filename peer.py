@@ -17,17 +17,13 @@ class Peer:
         self.connection = PeerConnection()
     
     async def connect(self, client_id, info_hash): 
-        """ Connects and handshakes peer.
-
-        :return: -1 on error, bad handshake or timeout
-        """
+        """ Connects and handshakes peer """
         try:
             await asyncio.wait_for(
                 self.connection.initialize(self.ip, self.port, client_id, info_hash), 
                     timeout=2)
         except asyncio.TimeoutError:
             raise ConnectionError("Timed out connection")
-
         
 
 class PeerConnection:
@@ -45,6 +41,29 @@ class PeerConnection:
         # check received info_hash
         if response[28:48] != info_hash:
             raise ConnectionError(f"Got bad handshake from peer {ip}:{port}")
+
+    async def read_message(self):
+        """ Read a BitTorrent protocol message """
+        length = await self._recv(struct.calcsize(">I"))
+
+        if length == b'0':
+            raise ConnectionError("Connection closed")
+        
+        # unpack into python int 
+        length = struct.unpack(">I", length)[0]
+
+        message = b""
+        # read message
+        while length > 0:
+            data = await self._recv(length)
+            message += data
+            length -= len(data)
+        
+        return message
+    
+    async def send_message(self, msg):
+        await self._send(msg)
+
 
     async def _open(self, ip, port):
         """ Opens connection to peer with StreamReader and StreamWriter wrappers """
