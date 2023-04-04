@@ -2,29 +2,23 @@ import asyncio
 import aiohttp
 import hashlib
 import bencode
+import logging
 
 from urllib.parse import urlencode
 
 class Tracker:
-    def __init__(self, meta_info):
-        self.url = meta_info[b"announce"].decode("utf-8")
-        self.info_hash = meta_info[b"info"]
+    def __init__(self, url):
+        self.url = url.decode("utf-8") 
         self.interval = 0
         self.http_session = aiohttp.ClientSession()
-    
-    @property
-    def info_hash(self):
-        return self._info_hash
-    
-    @info_hash.setter
-    def info_hash(self, value):
-        self._info_hash = hashlib.sha1(bencode.dumps(value)).digest() 
+        self.req_count = 0
 
-
-    async def request_peers(self, client_id, port):
-        async with self.http_session.get(self._build_request(client_id, port)) as resp:
+    async def request_peers(self, client_id, port, info_hash):
+        async with self.http_session.get(self._build_request(client_id, port, info_hash)) as resp:
             if resp.status != 200:
-                print("Coulnd't resolve Tracker")
+                logging.debug("Couldn't resolve Tracker")
+                return
+            logging.debug("Recived Tracker response")
             response = bencode.loads(await resp.read())
         
         try:
@@ -32,14 +26,16 @@ class Tracker:
         except KeyError:
             pass
 
+        self.req_count += 1
+
         return response
     
     async def close(self):
         await self.http_session.close()
     
-    def _build_request(self, client_id, port):
+    def _build_request(self, client_id, port, info_hash):
         params = {
-            "info_hash": self.info_hash,
+            "info_hash": info_hash,
             "peer_id": client_id,
             "port": port,
             "uploaded": 0,
