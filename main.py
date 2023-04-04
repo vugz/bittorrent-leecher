@@ -7,24 +7,30 @@ import os
 import binascii
 import hashlib
 import logging
+import bitarray
 
 from tracker import Tracker
 
 from peer import Peer
 from peer import ConnectionError
+from pieces_manager import PiecesManager 
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 class Vutor:
     def __init__(self, torrent, *, max_peers=35, port=6881):
-        self.file = torrent 
-        self.max_peers = max_peers 
-        self.pcq_peers = asyncio.Queue()
-        self.meta_info = torrent 
-        self.info_hash = self.meta_info[b"info"]
+        self.meta_info = torrent           # decoded meta-info dict
+        self.file = self.meta_info         # file name
+        self.info_hash = self.meta_info    # info dict hash
+
+        self.peers = set()                 # scheduled or active peers
+        self.max_peers = max_peers         # max peers 
+        self.pcq_peers = asyncio.Queue()   # peers producer consumer queue
+
         self.port = port 
         self.client_id = "-VU0001-" + binascii.hexlify(os.urandom(6)).decode("utf-8")
-        self.peers = set()
+
+        self.pieces_manager = PiecesManager(self.meta_info) 
     
     @property
     def meta_info(self):
@@ -36,12 +42,20 @@ class Vutor:
             self._meta_info = bencode.load(fp)
     
     @property
+    def file(self):
+        return self._file
+    
+    @file.setter
+    def file(self, meta_info):
+        self._file = meta_info[b"info"][b"name"].decode("utf-8")
+    
+    @property
     def info_hash(self):
         return self._info_hash
     
     @info_hash.setter
-    def info_hash(self, info):
-        self._info_hash = hashlib.sha1(bencode.dumps(info)).digest() 
+    def info_hash(self, meta_info):
+        self._info_hash = hashlib.sha1(bencode.dumps(meta_info[b"info"])).digest() 
     
     @property
     def port(self):
@@ -55,6 +69,8 @@ class Vutor:
     
 
     async def run(self):
+        await self.pieces_manager.initialize()
+
         tracker_coro = asyncio.create_task(self.tracker_worker_coro())
 
         workers = [
@@ -62,9 +78,7 @@ class Vutor:
             for _ in range(self.max_peers)
         ]
 
-        await asyncio.sleep(60) 
-
-        print(self.peers)
+        await self.pieces_manager.join()
 
         tracker_coro.cancel()
         for worker in workers:
@@ -76,6 +90,7 @@ class Vutor:
         while True:
             try:
                 logging.info("Requesting Tracker")
+
                 resp = await tracker.request_peers(self.client_id, self.port, self.info_hash)
                 peer_list = self._decode_peers_list(resp[b"peers"])
 
@@ -103,7 +118,7 @@ class Vutor:
                 peer = await self.pcq_peers.get()
 
                 # instantiate peer 
-                peer = Peer(peer[0], peer[1])
+                peer = Peer(peer[0], peer[1], self.pieces_manager)
 
                 # connect to peer
                 try:
@@ -136,6 +151,7 @@ class Vutor:
 
 if __name__ == '__main__':
     client = Vutor("debian.iso.torrent", max_peers=45, port=8421)
+    print(client.file)
     asyncio.run(client.run(), debug=False)
 
 

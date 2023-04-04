@@ -1,20 +1,24 @@
 import asyncio
 import protocol
 import struct
+import bitarray
 
 class ConnectionError(Exception):
     ...
     
 class Peer:
-    def __init__(self, ip, port):
+    def __init__(self, ip, port, pieces_manager):
         self.ip = ip
         self.port = port
+
         self.choked = asyncio.Event() # Starts choked == not set, which blocks on wait()
         self.interested = 0
         self.am_choking = 1
         self.am_interested = 0
-        self.bitfield = None
-        self.connection = PeerConnection()
+
+        self.bitfield = bitarray('0' * pieces_manager.nr_pieces)   # peer's bitfield
+        self.pieces_manager = pieces_manager                   # reference to pieces manager 
+        self.connection = PeerConnection()                     # connection state
     
     async def connect(self, client_id, info_hash): 
         """ Connects and handshakes peer """
