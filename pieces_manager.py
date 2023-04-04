@@ -1,0 +1,3 @@
+class PiecesManager:
+    def __init__(self):
+        ...
