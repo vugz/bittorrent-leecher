@@ -3,6 +3,8 @@ import aiohttp
 import hashlib
 import bencode
 import logging
+import ipaddress
+import struct
 
 from urllib.parse import urlencode
 
@@ -16,9 +18,9 @@ class Tracker:
     async def request_peers(self, client_id, port, info_hash):
         async with self.http_session.get(self._build_request(client_id, port, info_hash)) as resp:
             if resp.status != 200:
-                logging.debug("Couldn't resolve Tracker")
+                #logging.debug("Couldn't resolve Tracker")
                 return
-            logging.debug("Recived Tracker response")
+            #logging.debug("Recived Tracker response")
             response = bencode.loads(await resp.read())
         
         try:
@@ -29,10 +31,15 @@ class Tracker:
         self.req_count += 1
 
         return response
-    
+
+    def decode_peers_list(self, raw_str):
+        return [(self._decode_ip(raw_str[i:i + 4]),
+                    self._decode_port(raw_str[i + 4:i + 6]))
+                                for i in range (0, len(raw_str), 6)]
+
     async def close(self):
         await self.http_session.close()
-    
+
     def _build_request(self, client_id, port, info_hash):
         params = {
             "info_hash": info_hash,
@@ -45,3 +52,11 @@ class Tracker:
         }
 
         return self.url + "?" + urlencode(params)
+
+    def _decode_ip(self, data):
+        return str(ipaddress.ip_address(data))
+    
+    def _decode_port(self, data):
+        return struct.unpack(">H", data)[0]
+
+

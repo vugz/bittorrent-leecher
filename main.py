@@ -8,6 +8,7 @@ import binascii
 import hashlib
 import logging
 import bitarray
+import math
 
 from tracker import Tracker
 
@@ -15,13 +16,30 @@ from peer import Peer
 from peer import ConnectionError
 from pieces_manager import PiecesManager 
 
-logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+from config import BLOCK_SIZE
+
 
 class Vutor:
+    """ We could have a metainfo dataclass or similar, might
+    be refactored into that in the future, for now
+    this class will serve also as that
+
+    This might seem weird, but here we simply pass the meta_info once
+    decoded to the setter function to set the values necessary for the client,
+    it might look weird but it is tidier and visually more concise.
+
+    Every attribute is sequentially initialized, often times relying on the previous
+    """
+
     def __init__(self, torrent, *, max_peers=35, port=6881):
-        self.meta_info = torrent           # decoded meta-info dict
-        self.file = self.meta_info         # file name
-        self.info_hash = self.meta_info    # info dict hash
+        self.meta_info = torrent                 # decoded meta-info dict
+        self.file = self.meta_info               # file name
+        self.piece_size = self.piece_size
+        self.nr_pieces = self.meta_info          # total nr of pieces
+        self.nr_blocks_in_piece = self.meta_info # nr of blocks in piece
+
+        self.pieces_hashes = self.meta_info      # tuple with the hashes of all pieces
+        self.info_hash = self.meta_info          # hash of info dict 
 
         self.peers = set()                 # scheduled or active peers
         self.max_peers = max_peers         # max peers 
@@ -30,7 +48,7 @@ class Vutor:
         self.port = port 
         self.client_id = "-VU0001-" + binascii.hexlify(os.urandom(6)).decode("utf-8")
 
-        self.pieces_manager = PiecesManager(self.meta_info) 
+        self.pieces_manager = PiecesManager(self.file, self.nr_pieces, self.piece_size) 
     
     @property
     def meta_info(self):
@@ -48,7 +66,31 @@ class Vutor:
     @file.setter
     def file(self, meta_info):
         self._file = meta_info[b"info"][b"name"].decode("utf-8")
+
+    @property
+    def piece_size(self):
+        return self._piece_size
     
+    @piece_size.setter
+    def piece_size(self, meta_info):
+        self._piece_size = meta_info[b"info"][b"piece length"]
+    
+    @property
+    def nr_pieces(self):
+        return self._nr_pieces
+    
+    @nr_pieces.setter
+    def nr_pieces(self, meta_info):
+        self._nr_pieces = math.ceil(meta_info[b"length"], self.nr_pieces) 
+
+    @property
+    def nr_blocks_in_piece(self):
+        return self._nr_blocks_in_piece
+    
+    @nr_blocks_in_piece.setter
+    def nr_blocks_in_piece(self, meta_info):
+        self._nr_blocks_in_piece = self.piece_size / BLOCK_SIZE 
+
     @property
     def info_hash(self):
         return self._info_hash
@@ -56,7 +98,16 @@ class Vutor:
     @info_hash.setter
     def info_hash(self, meta_info):
         self._info_hash = hashlib.sha1(bencode.dumps(meta_info[b"info"])).digest() 
+   
+    @property
+    def pieces_hashes(self):
+        return self._pieces_hashes
     
+    @pieces_hashes.setter
+    def pieces_hashes(self, meta_info):
+        raw_hash_str = meta_info[b"info"][b"pieces"]
+        self._pieces_hashes = (raw_hash_str[20 * i: 20 + 20*i].hex() for i in range(self.nr_pieces))
+
     @property
     def port(self):
         return self._port
@@ -78,21 +129,22 @@ class Vutor:
             for _ in range(self.max_peers)
         ]
 
-        await self.pieces_manager.join()
+        await self.pieces_manager.pieces_queue.join()
 
         tracker_coro.cancel()
         for worker in workers:
             worker.cancel()
+        
 
     async def tracker_worker_coro(self):
         tracker = Tracker(self.meta_info[b"announce"])
 
         while True:
             try:
-                logging.info("Requesting Tracker")
+                #logging.info("Requesting Tracker")
 
                 resp = await tracker.request_peers(self.client_id, self.port, self.info_hash)
-                peer_list = self._decode_peers_list(resp[b"peers"])
+                peer_list = tracker.decode_peers_list(resp[b"peers"])
 
                 for peer in peer_list:
                     if {peer} - self.peers:
@@ -102,7 +154,7 @@ class Vutor:
                         await self.pcq_peers.put(peer)
                 
                 # a lot of good peers are not sent in the first requests
-                if tracker.req_count > 3:
+                if tracker.req_count > 4:
                     await asyncio.sleep(tracker.interval)
                 else:
                     await asyncio.sleep(10)
@@ -118,14 +170,15 @@ class Vutor:
                 peer = await self.pcq_peers.get()
 
                 # instantiate peer 
-                peer = Peer(peer[0], peer[1], self.pieces_manager)
+                peer = Peer(peer[0], peer[1], self.pieces_manager, self.meta_info)
 
                 # connect to peer
                 try:
                     await peer.connect(self.client_id, self.info_hash)
-                    logging.info(f"Connected to peer {peer.ip}:{peer.port}")
-                except ConnectionError as e:
-                    logging.debug(str(e))
+                    #logging.info(f"Connected to peer {peer.ip}:{peer.port}")
+                    await peer.run_peer()
+                except Exception as e:
+                    #logging.debug(str(e))
                     # remove from peers lookup set
                     peer_tup = (peer.ip, peer.port)
                     self.peers.remove(peer_tup)
@@ -136,23 +189,13 @@ class Vutor:
         except asyncio.CancelledError:
             return
 
-    def _decode_peers_list(self, raw_str):
-        return [(self._decode_ip(raw_str[i:i + 4]),
-                    self._decode_port(raw_str[i + 4:i + 6]))
-                                for i in range (0, len(raw_str), 6)]
-
-    def _decode_ip(self, data):
-        return str(ipaddress.ip_address(data))
-    
-    def _decode_port(self, data):
-        return struct.unpack(">H", data)[0]
-
 
 
 if __name__ == '__main__':
-    client = Vutor("debian.iso.torrent", max_peers=45, port=8421)
+    # this does not support seeding, so the port is irrelevant
+    client = Vutor("debian.iso.torrent", max_peers=1, port=6881)
     print(client.file)
-    asyncio.run(client.run(), debug=False)
+    asyncio.run(client.run(), debug=True)
 
 
 
