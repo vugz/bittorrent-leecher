@@ -48,6 +48,8 @@ class Peer:
 
         # await all tasks to complete
         requester_task.cancel()
+        self.choked = 1
+        self.choke_event.set()
         piece = await requester_task 
 
         print(piece)
@@ -79,10 +81,11 @@ class Peer:
                 #     # put back in queue and fetch new piece 
                 #     continue
                 while self.choked:
-                    try:
-                        await asyncio.wait_for(self.choke_event.wait(), timeout=5.0)
-                    except asyncio.TimeoutError:
-                        continue
+                    await self.choke_event.wait()
+                    # try:
+                    #     await asyncio.wait_for(self.choke_event.wait(), timeout=5.0)
+                    # except asyncio.TimeoutError:
+                    #     continue
                 # print(f"Requesting {self.ip} piece{piece} and block{self.piece_handler.block}")
                 await self.piece_handler.request_piece(piece, self.connection, self.pieces_manager)
 

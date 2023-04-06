@@ -9,6 +9,7 @@ import hashlib
 import logging
 import bitarray
 import math
+import traceback
 
 from tracker import Tracker
 
@@ -173,6 +174,7 @@ class Vutor:
                     #logging.info(f"Connected to peer {peer.ip}:{peer.port}")
                     await peer.run_peer()
                 except Exception as e:
+                    print(str(e))
                     #logging.debug(str(e))
                     # remove from peers lookup set
                     peer_tup = (peer.ip, peer.port)
