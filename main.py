@@ -123,8 +123,6 @@ class Vutor:
 
         await self.pieces_manager.pieces_queue.join()
 
-        self.print_elapsed_time(elapsed)
-
         tracker_coro.cancel()
         for worker in workers:
             worker.cancel()
