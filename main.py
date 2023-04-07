@@ -16,7 +16,7 @@ from pieces_manager import PiecesManager
 from config import BLOCK_SIZE
 
 
-class Vutor:
+class Vuleech:
     """ We could have a metainfo dataclass or similar, might
     be refactored into that in the future, for now
     this class will serve also as that
@@ -190,8 +190,6 @@ class Vutor:
 
 if __name__ == '__main__':
     # this does not support seeding (yet), so the port is irrelevant
-    client = Vutor(os.sys.argv[1], max_peers=45, port=6881)
+    # add argparser
+    client = Vuleech(os.sys.argv[1], max_peers=45, port=6881)
     asyncio.run(client.run(), debug=False)
-
-
-
