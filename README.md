@@ -5,7 +5,7 @@ A BitTorrent protocol leecher Python implementation with strict policy and witho
 The name is a result of lack of creativity 
 
 ## Usage
-Requires this [module](https:/github.com/vugonz/bencode) which requires manual installation and is not provided in `requirements.txt`
+Requires this [module](https://github.com/vugonz/bencode) which requires manual installation and is not provided in `requirements.txt`
 
 **TODO**
 
