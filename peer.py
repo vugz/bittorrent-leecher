@@ -2,7 +2,6 @@ import asyncio
 import protocol
 import struct
 import bitstring
-import traceback
 import hashlib
 import logging
 
@@ -17,14 +16,12 @@ class Peer:
         self.ip = ip
         self.port = port
 
-        self.choke_event = asyncio.Event() # Starts choked == not set, which blocks on wait()
         self.choked = 1
         self.interested = 0
         self.am_choking = 1
         self.am_interested = 0
 
         self.bitfield = bitstring.BitArray(pieces_manager.nr_pieces)  # peer's bitfield
-        self.have = asyncio.Event()
         self.pieces_manager = pieces_manager                               # reference to pieces manager 
         self.connection = PeerConnection()                                 # connection state
 
@@ -32,7 +29,6 @@ class Peer:
 
     async def connect(self, client_id, info_hash): 
         """ Connects and handshakes peer """
-        # print(self.bitfield)
         try:
             await asyncio.wait_for(
                 self.connection.initialize(self.ip, self.port, client_id, info_hash), 
@@ -41,21 +37,6 @@ class Peer:
             raise ConnectionError("Timed out connection")
     
     async def run_peer(self):
-        # create listener and requester tasks
-        requester_task = asyncio.create_task(self.requester())
-
-        # await on listener to be canceled
-        listener_status = await asyncio.gather(self.listener(), return_exceptions=True)
-
-        # cancel requester
-        requester_task.cancel()
-        self.choke_event.set()
-        self.have.set()
-        await requester_task 
-
-        raise listener_status[0]
-
-    async def listener(self):
         """ Listens to messages """
         while True:
             try:
@@ -63,45 +44,28 @@ class Peer:
                 id, data = await asyncio.wait_for(self.connection.read_message(), 
                                                   timeout=2)
             except Exception: 
-                # traceback.print_exc()
+                # enqueue piece aborted mid download
+                if self.piece_handler.piece:
+                    self.pieces_manager.put_piece(self.piece_handler.piece)
                 raise ConnectionError(f"Dropping unresponsive peer {self.ip}")
 
             await self.handle_message(id, data)
     
-    async def requester(self):
-        """ Requests pieces """
-        try:
-            piece = None
-            while True:
-                # wait on unchoke
-                while self.choked:
-                    await self.choke_event.wait()
+            if self.choked:
+                continue
 
-                # wait on peer having a piece we need
-                while (piece := self.pieces_manager.get_piece(self.bitfield)) is None:
-                    self.have.clear()
-                    await self.have.wait()
-
-                await self.piece_handler.request_piece(piece, self.connection, self.pieces_manager)
-
-        except asyncio.CancelledError:
-            # traceback.print_exc()
-            if piece:
-                ret = await asyncio.shield(self.pieces_manager.put_piece(piece))
-            else:
-                ret = None
-        finally:
-            ret = await asyncio.shield(self.pieces_manager.put_piece(piece))
+            if self.piece_handler.piece is None:
+                self.piece_handler.piece = self.pieces_manager.get_piece(self.bitfield)
+            
+            await self.piece_handler.request_piece(self.connection)
+    
     
     async def handle_message(self, id, data):
-        # print(f"Got {id} {self.ip}")
         match id:
             case protocol.CHOKE:
                 self.choked = 1
-                self.choke_event.clear()
             case protocol.UNCHOKE:
                 self.choked = 0
-                self.choke_event.set()
             case protocol.INTERESTED:
                 self.interested = 1
             case protocol.NOT_INTERESTED:
@@ -119,76 +83,56 @@ class Peer:
     
     async def handle_have(self, data):
         self.bitfield[struct.unpack(">I", data)[0]] = 1
-        self.have.set()
         
-   
     async def handle_bitfield(self, data):
         self.bitfield = bitstring.BitArray(data)
-        self.have.set()
     
     async def handle_piece(self, data):
         # peers may queue responses se we might get repeated blocks
-        if not self._correct_piece(data[0:4]) or not self._correct_block(data[4:8]):
-            self.piece_handler.set_fetched_block()
-            return
-
-        self.piece_handler.inc_block_count()
-        self.piece_handler.add_block(data[8:])
-        self.piece_handler.set_fetched_block()
-    
-    def _correct_piece(self, raw_piece):
-        # print(raw_piece)
-        return struct.unpack(">I", raw_piece)[0] == self.piece_handler.piece
-    
-    def _correct_block(self, raw_offset):
-        # print(raw_offset)
-        return struct.unpack(">I", raw_offset)[0] == self.piece_handler.block_count * BLOCK_SIZE 
-
-        
+        await self.piece_handler.handle_piece(data, self.pieces_manager)
 
 class PieceHandler:
     def __init__(self, max_blocks, pieces_hashes):
-        self.piece = 0
+        self.piece = None 
         self.block_count = 0
         self.max_blocks = max_blocks 
         self.pieces_hashes = pieces_hashes
         self.buffer = b""
-        self.fetched = asyncio.Event()
     
-    def _reset(self, piece):
-        self.piece = piece 
+    def _reset(self):
+        self.piece = None 
         self.block_count = 0
         self.buffer = b""
-        self.fetched.clear()
-  
-    def inc_block_count(self):
-        self.block_count += 1
-    
-    def set_fetched_block(self):
-        self.fetched.set()
-    
-    def add_block(self, data):
-        self.buffer += data
 
-    async def request_piece(self, piece, connection, piece_manager):
-        # reset piece handler 
-        self._reset(piece)
+    def _correct_piece(self, raw_piece):
+        return struct.unpack(">I", raw_piece)[0] == self.piece
+    
+    def _correct_block(self, raw_offset):
+        return struct.unpack(">I", raw_offset)[0] == self.block_count * BLOCK_SIZE 
 
-        # we will request by block index order and simply append to the buffer 
-        while self.block_count < self.max_blocks:
-            await connection.send_message(protocol.Request(self.piece, self.block_count))
-            self.fetched.clear()
-            # wait on listener to retrieve the requested piece
-            await self.fetched.wait()
-        
-        if not self.check_hash():
-            print(f"Failed hash")
+    async def request_piece(self, connection):
+        if self.piece is None:
             return
-        
-        # save piece
-        await asyncio.shield(piece_manager.save_piece(self.buffer, self.piece))
+        await connection.send_message(protocol.Request(self.piece, self.block_count))
+
+    async def handle_piece(self, data, piece_manager):
+        if not self._correct_piece(data[0:4]) or not self._correct_block(data[4:8]):
+            return
+
+        self.buffer += data[8:]
+        self.block_count += 1
+
+        if self.block_count < self.max_blocks:
+            return
+
+        if not self.match_hashes():
+            piece_manager.put_piece(self.piece)
+        else:
+            await piece_manager.save_piece(self.buffer, self.piece)
+
+        self._reset()
     
-    def check_hash(self):
+    def match_hashes(self):
         return hashlib.sha1(self.buffer).hexdigest() == self.pieces_hashes[self.piece]
 
 
@@ -215,7 +159,6 @@ class PeerConnection:
         length = await self._recv(struct.calcsize(">I"))
 
         if length == b'':
-            # print("stopping here?")
             raise ConnectionError("Connection closed by peer")
         
         # unpack into python int 
@@ -243,7 +186,8 @@ class PeerConnection:
         try:
             self.reader, self.writer = await asyncio.open_connection(ip, port)
         except Exception as e:
-            raise ConnectionError(str(e))
+            logging.debug(str(e))
+            raise ConnectionError("Failed opening connection to peer")
     
     async def _send(self, msg):
         self.writer.write(msg)
@@ -252,6 +196,7 @@ class PeerConnection:
     async def _recv(self, size):
         try:
             return await self.reader.read(size)
-        except Exception:
+        except Exception as e:
+            logging.debug(str(e))
             raise ConnectionError("Connection was reset by peer")
 

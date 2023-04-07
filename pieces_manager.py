@@ -1,9 +1,9 @@
 import math
-import bitarray
 import asyncio
 import aiofiles
 import os
-from enum import Enum 
+import logging
+import aiofiles
 
 class Piece:
     MISSING = 0
@@ -20,6 +20,8 @@ class PiecesManager:
         self.piece_size = piece_size 
         self.piece_bitmap = [Piece() for _ in range(self.nr_pieces)]
         self.pieces_queue = asyncio.Queue() 
+        self.gotten_pieces = 0
+        self.factor = math.ceil(nr_pieces / 100)
         
     async def initialize(self):
         # create the output file
@@ -39,23 +41,30 @@ class PiecesManager:
         
         return None
     
-    async def put_piece(self, index):
+    def put_piece(self, index):
         """ Put back a piece in the Queue """
         self.piece_bitmap[index].state = Piece.MISSING
     
     async def save_piece(self, piece, index):
         """ Save piece to disk """
-        with open(self.file, mode="rb+") as fp:
-            fp.seek(index * self.piece_size, 0)
-            fp.write(piece)
+        async with aiofiles.open(self.file, mode="rb+") as fp:
+            await fp.seek(index * self.piece_size, 0)
+            await fp.write(piece)
+            await fp.flush()
 
-        print(f"Sucessfully retrieved peice {index}")
+        logging.info(f"Sucessfully retrieved peice {index}")
+        
+        self.gotten_pieces += 1
+
+        if not self.gotten_pieces % self.factor:
+            # TODO make it a ncurses client?
+            done = int(math.ceil(self.gotten_pieces * 100 / self.nr_pieces % 100))
+            if not done:
+                done = 100
+            print(f"({done}%) " + "[" +"*" *done + "-" * (100 - done) + "]")
+
         self.piece_bitmap[index].state = Piece.COMPLETE
-        print("TASK_DONE_CALL")
         self.pieces_queue.task_done()
-        for _ in self.piece_bitmap:
-            print(_.state, end="")
-        print("")
 
         
 

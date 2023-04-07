@@ -72,6 +72,9 @@ class Request:
     """ Request a block from peer 
     
     format: <len=0013><id=6><index><begin><length>
+
+    :params: piece index
+    :params: offset
     """
     def __new__(self, index, offset):
         """

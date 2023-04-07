@@ -1,15 +1,11 @@
 import bencode
 import asyncio
-import random
-import struct
-import ipaddress
 import os
 import binascii
 import hashlib
 import logging
-import bitarray
 import math
-import traceback
+import time
 
 from tracker import Tracker
 
@@ -114,6 +110,8 @@ class Vutor:
     
 
     async def run(self):
+        print(f"Downloading file {self.file}")
+        # TODO implement seeding functionality (async or multithreaded)
         await self.pieces_manager.initialize()
 
         tracker_coro = asyncio.create_task(self.tracker_worker_coro())
@@ -124,16 +122,8 @@ class Vutor:
         ]
 
         await self.pieces_manager.pieces_queue.join()
-        print(self.pieces_manager.pieces_queue.qsize())
-        print("End reached?!")
-        print(self.pieces_manager.piece_bitmap)
-        for i in range(self.nr_pieces):
-            if self.pieces_manager.piece_bitmap[i].state != 1:
-                print(f"Failed piece {i}")
-        
-        print("Done")
-        for _ in self.pieces_manager.piece_bitmap:
-            print(_.state, end="")
+
+        self.print_elapsed_time(elapsed)
 
         tracker_coro.cancel()
         for worker in workers:
@@ -156,7 +146,15 @@ class Vutor:
                         # add to peers queue
                         await self.pcq_peers.put(peer)
                 
-                # a lot of good peers are not sent in the first requests
+                # TODO check on additional information on tracker's response
+
+                # TODO await until next response based on
+                # tracker's response additional info and active / scheduled peers 
+
+                
+                # this was done like so because debian's tracker
+                # doesn't specify a min interval and the interval is usually
+                # too big 
                 if tracker.req_count > 1000:
                     await asyncio.sleep(tracker.interval)
                 else:
@@ -172,17 +170,15 @@ class Vutor:
                 # get peer from Queue
                 peer = await self.pcq_peers.get()
 
-                # instantiate peer 
-                print(peer)
+                # dep injections is a kink of mine
                 peer = Peer(peer[0], peer[1], self.pieces_manager, self.nr_blocks_in_piece, self.pieces_hashes)
 
-                # connect to peer
                 try:
                     await peer.connect(self.client_id, self.info_hash)
                     logging.info(f"Connected to peer {peer.ip}:{peer.port}")
                     await peer.run_peer()
-                except Exception as e:
-                    logging.debug(str(e))
+                except ConnectionError as e:
+                    logging.info(str(e))
                     # remove from peers lookup set
                     peer_tup = (peer.ip, peer.port)
                     self.peers.remove(peer_tup)
@@ -195,10 +191,9 @@ class Vutor:
 
 
 if __name__ == '__main__':
-    # this does not support seeding, so the port is irrelevant
+    # this does not support seeding (yet), so the port is irrelevant
     client = Vutor(os.sys.argv[1], max_peers=45, port=6881)
-    print(client.file)
-    asyncio.run(client.run(), debug=True)
+    asyncio.run(client.run(), debug=False)
 
 
 

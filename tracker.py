@@ -1,8 +1,5 @@
-import asyncio
 import aiohttp
-import hashlib
 import bencode
-import logging
 import ipaddress
 import struct
 
