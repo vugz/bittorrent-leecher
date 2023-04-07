@@ -124,7 +124,16 @@ class Vutor:
         ]
 
         await self.pieces_manager.pieces_queue.join()
+        print(self.pieces_manager.pieces_queue.qsize())
         print("End reached?!")
+        print(self.pieces_manager.piece_bitmap)
+        for i in range(self.nr_pieces):
+            if self.pieces_manager.piece_bitmap[i].state != 1:
+                print(f"Failed piece {i}")
+        
+        print("Done")
+        for _ in self.pieces_manager.piece_bitmap:
+            print(_.state, end="")
 
         tracker_coro.cancel()
         for worker in workers:
@@ -148,7 +157,7 @@ class Vutor:
                         await self.pcq_peers.put(peer)
                 
                 # a lot of good peers are not sent in the first requests
-                if tracker.req_count > 60:
+                if tracker.req_count > 1000:
                     await asyncio.sleep(tracker.interval)
                 else:
                     await asyncio.sleep(10)
@@ -164,18 +173,16 @@ class Vutor:
                 peer = await self.pcq_peers.get()
 
                 # instantiate peer 
-                # print(f"NR OF BLOCKS IN PIECE {self.nr_blocks_in_piece}")
-                # print(f"pieces={self.nr_pieces} length_piece={self.piece_size}")
+                print(peer)
                 peer = Peer(peer[0], peer[1], self.pieces_manager, self.nr_blocks_in_piece, self.pieces_hashes)
 
                 # connect to peer
                 try:
                     await peer.connect(self.client_id, self.info_hash)
-                    #logging.info(f"Connected to peer {peer.ip}:{peer.port}")
+                    logging.info(f"Connected to peer {peer.ip}:{peer.port}")
                     await peer.run_peer()
                 except Exception as e:
-                    print(str(e))
-                    #logging.debug(str(e))
+                    logging.debug(str(e))
                     # remove from peers lookup set
                     peer_tup = (peer.ip, peer.port)
                     self.peers.remove(peer_tup)
@@ -189,9 +196,9 @@ class Vutor:
 
 if __name__ == '__main__':
     # this does not support seeding, so the port is irrelevant
-    client = Vutor("debian.iso.torrent", max_peers=45, port=6881)
+    client = Vutor(os.sys.argv[1], max_peers=45, port=6881)
     print(client.file)
-    asyncio.run(client.run(), debug=False)
+    asyncio.run(client.run(), debug=True)
 
 
 
