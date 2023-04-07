@@ -123,6 +123,8 @@ class Vutor:
 
         await self.pieces_manager.pieces_queue.join()
 
+        print("Download complete")
+
         tracker_coro.cancel()
         for worker in workers:
             worker.cancel()
@@ -177,12 +179,10 @@ class Vutor:
                     await peer.run_peer()
                 except ConnectionError as e:
                     logging.info(str(e))
+
                     # remove from peers lookup set
                     peer_tup = (peer.ip, peer.port)
                     self.peers.remove(peer_tup)
-                    continue
-
-                await asyncio.sleep(60)
 
         except asyncio.CancelledError:
             return
