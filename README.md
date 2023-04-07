@@ -16,6 +16,7 @@ python main.py file.torrent
 ```
 
 Example result
+
 ![Debian iso download](./imgs/example.png)
 
 
